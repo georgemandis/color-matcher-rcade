@@ -1,0 +1,18 @@
+{
+  "$schema": "https://rcade.dev/manifest.schema.json",
+  "name": "my-fun-game",
+  "display_name": "Color Matcher",
+  "description": "A color matching game",
+  "visibility": "internal",
+  "authors": [
+    {
+      "display_name": "George Mandis"
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "@rcade/input-classic",
+      "version": "1.0.0"
+    }
+  ]
+}
