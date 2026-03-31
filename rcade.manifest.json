@@ -3,7 +3,7 @@
   "name": "color-matcher",
   "display_name": "Color Matcher",
   "description": "A color matching game",
-  "visibility": "internal",
+  "visibility": "public",
   "authors": [
     {
       "display_name": "George Mandis",
