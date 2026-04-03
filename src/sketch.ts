@@ -226,97 +226,62 @@ const GRADIENT_MODES: GradientMode[] = [
     },
 ];
 
-// --- Wikimedia Picture of the Day ---
+// --- Bundled photo library ---
+// Pre-resized to GRAD_W x GRAD_H, served from public/photos/
 
-type WikiImageData = {
+const PHOTO_LIBRARY: { file: string; title: string; artist: string }[] = [
+    { file: "andromeda_galaxy.jpg", title: "Andromeda Galaxy", artist: "NASA" },
+    { file: "birth_of_venus.jpg", title: "The Birth of Venus", artist: "Sandro Botticelli" },
+    { file: "blue_marble.jpg", title: "The Blue Marble", artist: "NASA / Apollo 17" },
+    { file: "cafe_terrace.jpg", title: "Café Terrace at Night", artist: "Vincent van Gogh" },
+    { file: "crab_nebula.jpg", title: "Crab Nebula", artist: "NASA / Hubble" },
+    { file: "earthrise.jpg", title: "Earthrise", artist: "NASA / Apollo 8" },
+    { file: "girl_with_pearl_earring.jpg", title: "Girl with a Pearl Earring", artist: "Johannes Vermeer" },
+    { file: "great_wave.jpg", title: "The Great Wave off Kanagawa", artist: "Katsushika Hokusai" },
+    { file: "impression_sunrise.jpg", title: "Impression, Sunrise", artist: "Claude Monet" },
+    { file: "milkmaid.jpg", title: "The Milkmaid", artist: "Johannes Vermeer" },
+    { file: "mona_lisa.jpg", title: "Mona Lisa", artist: "Leonardo da Vinci" },
+    { file: "pale_blue_dot.jpg", title: "Pale Blue Dot", artist: "NASA / Voyager 1" },
+    { file: "pillars_of_creation.jpg", title: "Pillars of Creation", artist: "NASA / Hubble" },
+    { file: "saturn.jpg", title: "Saturn during Equinox", artist: "NASA / Cassini" },
+    { file: "starry_night.jpg", title: "The Starry Night", artist: "Vincent van Gogh" },
+    { file: "sunday_grande_jatte.jpg", title: "A Sunday on La Grande Jatte", artist: "Georges Seurat" },
+    { file: "the_scream.jpg", title: "The Scream", artist: "Edvard Munch" },
+];
+
+type PhotoImageData = {
     img: HTMLImageElement;
-    description: string;
+    title: string;
     artist: string;
-    // Pixel data from the scaled image (GRAD_W x GRAD_H)
     pixels: Uint8ClampedArray;
     w: number;
     h: number;
-    // 5 dominant colors extracted via k-means clustering
     dominantColors: [number, number, number][];
 };
 
-// Cache: map of "YYYY/MM/DD" -> WikiImageData
-const wikiCache: Map<string, WikiImageData> = new Map();
-let wikiFetchInProgress = false;
-let wikiFetchError: string | null = null;
+// Cache: map of filename -> PhotoImageData
+const photoCache: Map<string, PhotoImageData> = new Map();
+let photoFetchError: string | null = null;
 
-// How many days back we can pull photos from
-const PHOTO_POOL_DAYS = 30;
-
-function dateString(d: Date): string {
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    return `${yyyy}/${mm}/${dd}`;
-}
-
-function todayString(): string {
-    return dateString(new Date());
-}
-
-/** Pick a date from the last PHOTO_POOL_DAYS days using the given RNG */
-function randomRecentDate(rng: () => number): string {
-    const daysAgo = Math.floor(rng() * PHOTO_POOL_DAYS);
-    const d = new Date();
-    d.setDate(d.getDate() - daysAgo);
-    return dateString(d);
-}
-
-async function fetchWikiImage(dateStr: string): Promise<WikiImageData> {
-    // Return cache hit
-    const cached = wikiCache.get(dateStr);
+async function loadBundledPhoto(entry: typeof PHOTO_LIBRARY[number]): Promise<PhotoImageData> {
+    const cached = photoCache.get(entry.file);
     if (cached) return cached;
 
-    wikiFetchInProgress = true;
-    wikiFetchError = null;
+    const pixelData = await loadImagePixels(`photos/${entry.file}`);
+    const dominantColors = kMeansDominantColors(pixelData.pixels, pixelData.w, pixelData.h, 5);
 
-    try {
-        const url = `https://api.wikimedia.org/feed/v1/wikipedia/en/featured/${dateStr}`;
-        console.log("[Color Matcher] Fetching POTD from:", url);
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error(`API returned ${resp.status}`);
-        const data = await resp.json();
+    const result: PhotoImageData = {
+        img: pixelData.img,
+        title: entry.title,
+        artist: entry.artist,
+        pixels: pixelData.pixels,
+        w: pixelData.w,
+        h: pixelData.h,
+        dominantColors,
+    };
 
-        if (!data.image) throw new Error("No image of the day available");
-
-        // Use the default thumbnail URL from the API (~960px, pre-cached by Wikimedia).
-        // Requesting custom widths like 320px can trigger 429 rate limits since
-        // non-standard sizes require server-side generation. We scale client-side instead.
-        const thumbUrl = data.image.thumbnail.source;
-        console.log("[Color Matcher] Loading image:", thumbUrl);
-        const description = data.image.description?.text || "";
-        const artist = data.image.artist?.text || "";
-
-        const pixelData = await loadImagePixels(thumbUrl);
-
-        // Extract 5 dominant colors via k-means clustering
-        const dominantColors = kMeansDominantColors(pixelData.pixels, pixelData.w, pixelData.h, 5);
-        console.log("[Color Matcher] Dominant colors:", dominantColors);
-
-        const result: WikiImageData = {
-            img: pixelData.img,
-            description,
-            artist,
-            pixels: pixelData.pixels,
-            w: pixelData.w,
-            h: pixelData.h,
-            dominantColors,
-        };
-
-        wikiCache.set(dateStr, result);
-        wikiFetchInProgress = false;
-        return result;
-    } catch (e) {
-        console.error("[Color Matcher] Failed to load POTD:", e);
-        wikiFetchInProgress = false;
-        wikiFetchError = (e as Error).message;
-        throw e;
-    }
+    photoCache.set(entry.file, result);
+    return result;
 }
 
 // --- K-Means color clustering ---
@@ -427,26 +392,12 @@ function loadImagePixels(
 }> {
     return new Promise((resolve, reject) => {
         const img = new Image();
-        img.crossOrigin = "anonymous";
         img.onload = () => {
-            // Scale to fit GRAD_W x GRAD_H while maintaining aspect ratio,
-            // then center-crop to exactly GRAD_W x GRAD_H
             const canvas = document.createElement("canvas");
             canvas.width = GRAD_W;
             canvas.height = GRAD_H;
             const ctx = canvas.getContext("2d")!;
-
-            // Fill with black first (for images that don't fill the space)
-            ctx.fillStyle = "#000";
-            ctx.fillRect(0, 0, GRAD_W, GRAD_H);
-
-            // Scale to cover
-            const scale = Math.max(GRAD_W / img.width, GRAD_H / img.height);
-            const sw = img.width * scale;
-            const sh = img.height * scale;
-            const sx = (GRAD_W - sw) / 2;
-            const sy = (GRAD_H - sh) / 2;
-            ctx.drawImage(img, sx, sy, sw, sh);
+            ctx.drawImage(img, 0, 0, GRAD_W, GRAD_H);
 
             const imageData = ctx.getImageData(0, 0, GRAD_W, GRAD_H);
             resolve({
@@ -461,16 +412,16 @@ function loadImagePixels(
     });
 }
 
-/** Sample a color from wiki image pixel data at (x, y) */
-function sampleWikiPixel(
-    wiki: WikiImageData,
+/** Sample a color from photo image pixel data at (x, y) */
+function samplePhotoPixel(
+    photo: PhotoImageData,
     x: number,
     y: number
 ): [number, number, number] {
-    const cx = Math.max(0, Math.min(wiki.w - 1, Math.round(x)));
-    const cy = Math.max(0, Math.min(wiki.h - 1, Math.round(y)));
-    const idx = (cy * wiki.w + cx) * 4;
-    return [wiki.pixels[idx], wiki.pixels[idx + 1], wiki.pixels[idx + 2]];
+    const cx = Math.max(0, Math.min(photo.w - 1, Math.round(x)));
+    const cy = Math.max(0, Math.min(photo.h - 1, Math.round(y)));
+    const idx = (cy * photo.w + cx) * 4;
+    return [photo.pixels[idx], photo.pixels[idx + 1], photo.pixels[idx + 2]];
 }
 
 
@@ -915,7 +866,7 @@ const sketch = (p: p5) => {
 
     // Photo mode state — one image per round
     let photoRounds: {
-        wiki: WikiImageData;
+        photo: PhotoImageData;
         p5img: p5.Image;
         targetColor: [number, number, number];
     }[] = [];
@@ -1040,38 +991,35 @@ const sketch = (p: p5) => {
         if (gameMode === "photo") {
             state = "loading_photo";
             photoRounds = [];
-            // Pick 5 different photos from the last 30 days (one per round)
+            photoFetchError = null;
+            // Shuffle the photo library and pick 5
             photoRng = mulberry32(dateSeed() + Math.floor(Math.random() * 10000));
-            const dates: string[] = [];
-            const usedDates = new Set<string>();
-            while (dates.length < 5) {
-                const d = randomRecentDate(photoRng);
-                if (!usedDates.has(d)) {
-                    usedDates.add(d);
-                    dates.push(d);
-                }
+            const shuffled = [...PHOTO_LIBRARY];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(photoRng() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
             }
-            // Fetch all 5 images in parallel
-            Promise.all(dates.map((d) => fetchWikiImage(d)))
-                .then((wikis) => {
-                    for (const wiki of wikis) {
+            const picks = shuffled.slice(0, 5);
+            // Load all 5 images in parallel
+            Promise.all(picks.map((entry) => loadBundledPhoto(entry)))
+                .then((photos) => {
+                    for (const photo of photos) {
                         const img = p.createImage(GRAD_W, GRAD_H);
                         img.loadPixels();
-                        for (let i = 0; i < wiki.pixels.length; i++) {
-                            img.pixels[i] = wiki.pixels[i];
+                        for (let i = 0; i < photo.pixels.length; i++) {
+                            img.pixels[i] = photo.pixels[i];
                         }
                         img.updatePixels();
-                        // Pick the most dominant color for this round's target
                         photoRounds.push({
-                            wiki,
+                            photo,
                             p5img: img,
-                            targetColor: wiki.dominantColors[0],
+                            targetColor: photo.dominantColors[0],
                         });
                     }
                     startRound();
                 })
-                .catch(() => {
-                    // On failure, stay on loading screen (error is displayed)
+                .catch((e) => {
+                    photoFetchError = (e as Error).message;
                 });
             return;
         }
@@ -1225,8 +1173,8 @@ const sketch = (p: p5) => {
             case "loading_photo":
                 drawLoading();
                 // Allow user to go back on error
-                if (wikiFetchError && startPressed) {
-                    wikiFetchError = null;
+                if (photoFetchError && startPressed) {
+                    photoFetchError = null;
                     state = "title";
                 }
                 break;
@@ -1290,7 +1238,7 @@ const sketch = (p: p5) => {
 
                 let picked: [number, number, number];
                 if (gameMode === "photo" && photoRounds[round]) {
-                    picked = sampleWikiPixel(photoRounds[round].wiki, px, py);
+                    picked = samplePhotoPixel(photoRounds[round].photo, px, py);
                 } else {
                     const mode = GRADIENT_MODES[gradModeIndex];
                     picked = mode.colorAt(px / (GRAD_W - 1), py / (GRAD_H - 1));
@@ -1611,12 +1559,12 @@ const sketch = (p: p5) => {
         p.fill(255);
         p.noStroke();
         p.textAlign(p.CENTER, p.CENTER);
-        if (wikiFetchError) {
+        if (photoFetchError) {
             p.textSize(10);
             p.text("Load failed", WIDTH / 2, HEIGHT / 2 - 15);
             p.textSize(6);
             p.fill(180);
-            p.text(wikiFetchError, WIDTH / 2, HEIGHT / 2 + 10);
+            p.text(photoFetchError, WIDTH / 2, HEIGHT / 2 + 10);
             p.fill(255);
             p.textSize(7);
             p.text("START: go back", WIDTH / 2, HEIGHT / 2 + 35);
@@ -1766,7 +1714,7 @@ const sketch = (p: p5) => {
             for (let x = 0; x < GRAD_W; x += step) {
                 let color: [number, number, number];
                 if (gameMode === "photo" && photoRounds[round]) {
-                    color = sampleWikiPixel(photoRounds[round].wiki, x, y);
+                    color = samplePhotoPixel(photoRounds[round].photo, x, y);
                 } else {
                     color = GRADIENT_MODES[gradModeIndex].colorAt(
                         x / (GRAD_W - 1), y / (GRAD_H - 1)
